@@ -11,6 +11,9 @@
    - Printen sequentieel
 
 
+   - In wat formaat data doorsturen?
+
+
 
 2. Project requirements
    - At boot keep listening for beacon with radio 

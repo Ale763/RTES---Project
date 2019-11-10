@@ -34,7 +34,6 @@ EDB db(&writer, &reader);
 
 void setup()
 {
-  
   Serial.begin(9600);
   while(!Serial);
   int recno;

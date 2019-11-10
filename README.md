@@ -12,6 +12,7 @@
 
 
    - In wat formaat data doorsturen?
+   - Hoe afhandelen ontvangen vs user commands
 
 
 

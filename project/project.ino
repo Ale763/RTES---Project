@@ -15,6 +15,10 @@
 #define BAND    868E6 //915E6
 #define PABOOST true
 
+#define READ_LATEST_TEMP  1
+#define READ_ALL_TEMP     2
+#define ENABLE_LOW_OP     3
+
 int packetCounter = 0;
 int sleepTime = 0;
 String incomingPacket;
@@ -24,12 +28,13 @@ unsigned long receive0 = 0;
 unsigned long receive1 = 0;
 TaskHandle_t receiveBeaconTaskHandle;
 TickType_t receiveDelay;
+TaskHandle_t userCommandTaskHandle;
+// TickType_t receiveDelay;
 void setup() 
 {
   Serial.begin(9600);                             // Set data rate in bits for serial transmission
   while(!Serial);                                 // Wait for Serial to become ready
   Serial.println("PR booting...");
-  Serial.println(sizeof(float));
   LoRa.setPins(SS,RST,DI0);
   if (!LoRa.begin(BAND, PABOOST))
   {
@@ -44,13 +49,47 @@ void setup()
       "receiveBeacon",
       128,  // Stack size
       NULL, //paramaters task
-      3,    // priority
+      2,    // priority
       &receiveBeaconTaskHandle);
+
+  /* User Command Task */
+  xTaskCreate(
+      handleUserCommands,
+      "handleUserCommands",
+      128,  // Stack size
+      NULL, //paramaters task
+      1,    // priority
+      &userCommandTaskHandle);
 }
 
-void loop() {
+void loop() 
+{
   
-  //incomingPacket = receive();
+}
+
+void handleUserCommands(void *pvParameters)
+{
+  while(1)
+  {
+    int userInput = NULL;
+    if (Serial.available() != 0)userInput = Serial.parseInt();
+
+    if (userInput == READ_LATEST_TEMP)
+    { 
+      Serial.println("Execute - Read latest temperature entry");
+      
+    }
+    else if (userInput == READ_ALL_TEMP)
+    {
+      Serial.println("Execute - Read all temperature entries");
+    }
+    else if (userInput == ENABLE_LOW_OP) 
+    {
+      Serial.println("Execute - Enable low operation mode");
+    }
+
+    vTaskDelay(1);  // One tick delay in between reads for stability.
+  }
 }
 
 void receiveBeacon(void *pvParameters)
@@ -64,22 +103,13 @@ void receiveBeacon(void *pvParameters)
     sleepTime = receive();
     send(sleepTime, chipTemp(chipTempRaw()));
     packetCounter++;
-    if (packetCounter == 20) break;
-//    receive1 = millis();
-//    int computationDelay = (receive1 - receive0) + 500;
-//    if (computationDelay < 0) computationDelay = 500;
-//    receiveDelay = (sleepTime - computationDelay) / portTICK_PERIOD_MS;
-//    Serial.print("computationDelay: ");
-//    Serial.println(computationDelay);
-//    Serial.print("receiveDelay: ");
-//    Serial.println(receiveDelay);
-//    if (receiveDelay <= 0) receiveDelay = 1 ;
     milisBefore = millis();
     receiveDelay = (sleepTime - (0.045 * sleepTime) - 150) / portTICK_PERIOD_MS;
     vTaskDelay(receiveDelay);
     milisAfter = millis();
     Serial.print("Seconds slept: ");
     Serial.println(milisAfter-milisBefore);
+    if (packetCounter == 20) break;
   }
   Serial.println("Deep sleep mode");
 }
@@ -96,21 +126,19 @@ void send(int sleepTime, float temp) {
 
 int receive()
 {
-//  Serial.print("Listening for packet: ");
   // Try to parse packet
   int packetSize = LoRa.parsePacket();
+  // Keep waiting for packet
   while (packetSize == 0)
   {
     packetSize = LoRa.parsePacket();
   }
-  // Received a packet
-//  Serial.println("Received packet ");
 
   //Read packet
   byte buffer[sizeof(int)] = {};
   int i = 0;
 
-  Serial.print("Reading packet: ");
+  Serial.println("Reading packet: ");
   while (LoRa.available() && i< sizeof(int))
   {
     // Serial.println(LoRa.read());

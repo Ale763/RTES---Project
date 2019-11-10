@@ -15,7 +15,7 @@
 #define BAND    868E6 //915E6
 #define PABOOST true
 
-int counter = 0;
+int packetCounter = 0;
 int sleepTime = 0;
 String incomingPacket;
 String inputPacket = "Ping";
@@ -29,8 +29,7 @@ void setup()
   Serial.begin(9600);                             // Set data rate in bits for serial transmission
   while(!Serial);                                 // Wait for Serial to become ready
   Serial.println("PR booting...");
-  Serial.print("Sizeof int");
-  Serial.println(sizeof(int));
+  Serial.println(sizeof(float));
   LoRa.setPins(SS,RST,DI0);
   if (!LoRa.begin(BAND, PABOOST))
   {
@@ -61,37 +60,43 @@ void receiveBeacon(void *pvParameters)
   String sleepTimeString = "";
   while(1)
   {
-    receive0 = millis();
-    Serial.println("Before receive");
+//    receive0 = millis();
     sleepTime = receive();
-    Serial.println("After receive");
-    // sleepTime = sleepTimeString.toInt();
-    Serial.print("sleepTime: ");
-    Serial.println(sleepTime);
-    receive1 = millis();
-    receiveDelay = (sleepTime - (receive1 - receive0) - 200) / portTICK_PERIOD_MS;
-
+    send(sleepTime, chipTemp(chipTempRaw()));
+    packetCounter++;
+    if (packetCounter == 20) break;
+//    receive1 = millis();
+//    int computationDelay = (receive1 - receive0) + 500;
+//    if (computationDelay < 0) computationDelay = 500;
+//    receiveDelay = (sleepTime - computationDelay) / portTICK_PERIOD_MS;
+//    Serial.print("computationDelay: ");
+//    Serial.println(computationDelay);
+//    Serial.print("receiveDelay: ");
+//    Serial.println(receiveDelay);
+//    if (receiveDelay <= 0) receiveDelay = 1 ;
     milisBefore = millis();
+    receiveDelay = (sleepTime - (0.045 * sleepTime) - 150) / portTICK_PERIOD_MS;
     vTaskDelay(receiveDelay);
     milisAfter = millis();
+    Serial.print("Seconds slept: ");
     Serial.println(milisAfter-milisBefore);
   }
+  Serial.println("Deep sleep mode");
 }
 
-void send(int packet) {
-  String packetString = String(packet);
-  //Serial.println("Sending packet: ");
+void send(int sleepTime, float temp) {
+  byte* sleepTimeBytes = (byte*)&sleepTime;
+  byte* tempBytes = (byte*)&temp;
+  
   LoRa.beginPacket();
-  //Serial.println("Begin sending packet: ");
-  LoRa.print(packetString);
-  //Serial.println("Ending sending packet: ");
+  LoRa.write(sleepTimeBytes, sizeof(sleepTime));
+  LoRa.write(tempBytes, sizeof(temp));
   LoRa.endPacket();
-  //Serial.println("Packet sent");
 }
 
 int receive()
 {
-  Serial.print("Listening for packet: ");
+//  Serial.print("Listening for packet: ");
   // Try to parse packet
   int packetSize = LoRa.parsePacket();
   while (packetSize == 0)
@@ -99,16 +104,39 @@ int receive()
     packetSize = LoRa.parsePacket();
   }
   // Received a packet
-  Serial.print("Received packet ");
+//  Serial.println("Received packet ");
 
   //Read packet
-  String input;
-  while (LoRa.available())
+  byte buffer[sizeof(int)] = {};
+  int i = 0;
+
+  Serial.print("Reading packet: ");
+  while (LoRa.available() && i< sizeof(int))
   {
     // Serial.println(LoRa.read());
-    input += (char)LoRa.read();
+    buffer[i++] = LoRa.read();
+//    Serial.print(buffer[i-1]);
   }
-  Serial.println(input.toInt());
+  int input = (int)(buffer[0] | buffer[1] << 8);
+  Serial.print("Packet: ");
+  Serial.println(packetCounter);
+  Serial.print("Received & converted sleepTime: ");
+  Serial.println(input);
 
-  return input.toInt();
+  return input;
+}
+
+float chipTemp(float raw) {
+  const float chipTempOffset = -142.5;
+  const float chipTempCoeff = .558;
+  return((raw * chipTempCoeff) + chipTempOffset);
+}
+
+int chipTempRaw(void) {
+  ADCSRA &= ~(_BV(ADATE) |_BV(ADIE));       // Clear auto trigger and interrupt enable
+  ADCSRA |= _BV(ADEN) | _BV(ADSC);          // Enable ADC and start conversion
+  
+  while((ADCSRA & _BV(ADSC)));              // Wait until conversion is mobdro finished   
+  int result = (ADCL | (ADCH << 8));
+  return result;
 }

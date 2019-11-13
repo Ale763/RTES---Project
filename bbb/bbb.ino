@@ -118,7 +118,9 @@ void send(int packet) {
 
   Serial.println("Sending packet: ");
   LoRa.beginPacket();
-  LoRa.print(packet);
+  byte* bytes = (byte*)&packet;
+
+  LoRa.write(bytes, sizeof(bytes));
   LoRa.endPacket();
   Serial.println("Packet sent");
 }

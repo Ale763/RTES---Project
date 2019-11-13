@@ -6,6 +6,9 @@
 #include <semphr.h>
 #include <avr/wdt.h>
 #include <avr/power.h>
+#include <EDB.h>
+#include <EEPROM.h>
+
 #define SCK     15
 #define MISO    14
 #define MOSI    16
@@ -14,32 +17,50 @@
 #define DI0     7
 #define BAND    868E6 //915E6
 #define PABOOST true
-
 #define READ_LATEST_TEMP  1
 #define READ_ALL_TEMP     2
 #define ENABLE_LOW_OP     3
+#define TABLE_SIZE 512
 
+bool DEBUG  = true; 
 int packetCounter = 0;
 int sleepTime = 0;
-String incomingPacket;
-String inputPacket = "Ping";
 bool sending = true;
 unsigned long receive0 = 0;
 unsigned long receive1 = 0;
 TaskHandle_t receiveBeaconTaskHandle;
 TickType_t receiveDelay;
 TaskHandle_t userCommandTaskHandle;
-// TickType_t receiveDelay;
+
+// The read and write handlers for using the EEPROM Library
+void writer(unsigned long address, byte data) { EEPROM.write(address, data); }
+byte reader(unsigned long address) { return EEPROM.read(address); }
+// Create an EDB object with the appropriate write and read handlers
+EDB db(&writer, &reader);
+struct TableEntry
+{
+  int sleeptime;
+  float temperature; //TODO: data structure for temp + amt of sleep
+} tableEntry;
 void setup() 
 {
   Serial.begin(9600);                             // Set data rate in bits for serial transmission
   while(!Serial);                                 // Wait for Serial to become ready
-  Serial.println("PR booting...");
+  debugPrintln("PR booting...");
+
+  // Initializing LoRa
   LoRa.setPins(SS,RST,DI0);
   if (!LoRa.begin(BAND, PABOOST))
   {
-    Serial.println("PR booting failed!");
+    debugPrintln("PR booting failed - LoRa could not be initialized");
     while(1);
+  }
+
+  // Initializing EDB
+  if (db.create(0, TABLE_SIZE, sizeof(TableEntry)) != EDB_OK)
+  {
+    debugPrintln("PR booting failed - EDB could not be initialized");
+    while (1);
   }
 
   /* Setup tasks */
@@ -67,6 +88,9 @@ void loop()
   
 }
 
+// --------------------------------------------------------------------------------------
+// Tasks
+
 void handleUserCommands(void *pvParameters)
 {
   while(1)
@@ -75,17 +99,16 @@ void handleUserCommands(void *pvParameters)
     if (Serial.available() != 0)userInput = Serial.parseInt();
 
     if (userInput == READ_LATEST_TEMP)
-    { 
-      Serial.println("Execute - Read latest temperature entry");
-      
+    {
+      debugPrintln("Execute - Read latest temperature entry");     
     }
     else if (userInput == READ_ALL_TEMP)
     {
-      Serial.println("Execute - Read all temperature entries");
+      debugPrintln("Execute - Read all temperature entries");
     }
     else if (userInput == ENABLE_LOW_OP) 
     {
-      Serial.println("Execute - Enable low operation mode");
+      debugPrintln("Execute - Enable low operation mode");
     }
 
     vTaskDelay(1);  // One tick delay in between reads for stability.
@@ -101,18 +124,23 @@ void receiveBeacon(void *pvParameters)
   {
 //    receive0 = millis();
     sleepTime = receive();
-    send(sleepTime, chipTemp(chipTempRaw()));
+    float temperature = chipTemp(chipTempRaw());
+    send(sleepTime, temperature);
+    db.appendRec
     packetCounter++;
     milisBefore = millis();
     receiveDelay = (sleepTime - (0.045 * sleepTime) - 150) / portTICK_PERIOD_MS;
     vTaskDelay(receiveDelay);
     milisAfter = millis();
-    Serial.print("Seconds slept: ");
-    Serial.println(milisAfter-milisBefore);
+    debugPrint("Seconds slept: ");
+    debugPrintln((int)(milisAfter - milisBefore));
     if (packetCounter == 20) break;
   }
-  Serial.println("Deep sleep mode");
+  debugPrintln("Deep sleep mode");
 }
+
+// --------------------------------------------------------------------------------------
+// Communication functionality
 
 void send(int sleepTime, float temp) {
   byte* sleepTimeBytes = (byte*)&sleepTime;
@@ -138,7 +166,7 @@ int receive()
   byte buffer[sizeof(int)] = {};
   int i = 0;
 
-  Serial.println("Reading packet: ");
+  debugPrintln("Reading packet: ");
   while (LoRa.available() && i< sizeof(int))
   {
     // Serial.println(LoRa.read());
@@ -146,13 +174,16 @@ int receive()
 //    Serial.print(buffer[i-1]);
   }
   int input = (int)(buffer[0] | buffer[1] << 8);
-  Serial.print("Packet: ");
-  Serial.println(packetCounter);
-  Serial.print("Received & converted sleepTime: ");
-  Serial.println(input);
+  debugPrint("Packet: ");
+  debugPrintln(packetCounter);
+  debugPrint("Received & converted sleepTime: ");
+  debugPrintln(input);
 
   return input;
 }
+
+// --------------------------------------------------------------------------------------
+// Temperature sensor methods
 
 float chipTemp(float raw) {
   const float chipTempOffset = -142.5;
@@ -167,4 +198,51 @@ int chipTempRaw(void) {
   while((ADCSRA & _BV(ADSC)));              // Wait until conversion is mobdro finished   
   int result = (ADCL | (ADCH << 8));
   return result;
+}
+
+// --------------------------------------------------------------------------------------
+// EDB functionality
+
+  void addTableEntry(float temperature, int sleeptime)
+  {
+    TableEntry entry;
+    entry.
+    db.appendRec(EDB_REC entry)
+
+  }
+
+
+// --------------------------------------------------------------------------------------
+// Debugprint
+
+void debugPrint(String message)
+{
+  if (DEBUG)
+  {
+    Serial.print(message);
+  }
+}
+
+void debugPrintln(String message)
+{
+  if (DEBUG)
+  {
+    Serial.println(message);
+  }
+}
+
+void debugPrintln(int message)
+{
+  if (DEBUG)
+  {
+    Serial.println(message);
+  }
+}
+
+void debugPrintln(float message)
+{
+  if (DEBUG)
+  {
+    Serial.println(message);
+  }
 }

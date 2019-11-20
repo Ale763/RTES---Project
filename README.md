@@ -43,3 +43,7 @@
      - Node
        - Beacon details
        - Temperature
+
+
+4. Things to test
+   - Serial delay in handleUserInput

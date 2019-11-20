@@ -47,3 +47,18 @@
 
 4. Things to test
    - Serial delay in handleUserInput
+
+5. MAIL
+  - Hoe interrupt testen
+  - Db reset or data has to persist?
+  - Crash IDE?
+
+
+6. TODO
+  - Deep sleep
+  - Interrupt
+  - Calibratie temperatuur
+  - Calibratie eventueel verfijnen guard time
+  - Database wrap
+  - Research max eeprom size
+  - Research lowering clock rate

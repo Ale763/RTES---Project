@@ -39,7 +39,7 @@ bool DEBUG  = true;
 int packetCounter = 0;
 int sleepTime = 0;
 
-const int wakeUpPin = 2;
+const int wakeUpPin = 3;
 
 int currentRecordNo = 0;
 float currentTemp;
@@ -324,11 +324,18 @@ void deepSleep()
   ADCSRA &= ~(1 << ADEN); //what is this?
   power_all_disable();  // turn off all modules
 
+  // Ensure no floating pins
+  for(int i=0; i<20 ; i++)
+  {
+    pinMode(i, OUTPUT);
+    digitalWrite(i, LOW);
+  }
+
   //LoRa.sleep();
 
   // Disable digital input buffers on all analog input pins
   // by setting bits 0-5 to one.
-  DIDR0 = DIDR0 | B00111111;
+  //DIDR0 = DIDR0 | B00111111;
 
   // Set sleep to full power down.
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -340,7 +347,7 @@ void deepSleep()
 
 
   //define interrupt
-  attachInterrupt(digitalPinToInterrupt(DI0), wakeUp, FALLING);
+  attachInterrupt(digitalPinToInterrupt(wakeUpPin), wakeUp, FALLING);
 
   sei(); //enable interrupts
 
@@ -351,7 +358,7 @@ void deepSleep()
 
   // On wakeUp...
 
-  detachInterrupt(digitalPinToInterrupt(DI0));
+  detachInterrupt(digitalPinToInterrupt(wakeUpPin));
   Serial.begin(9600);
   // put everything on again
   power_all_enable();

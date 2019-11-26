@@ -321,7 +321,7 @@ void deepSleep()
   TXLED0;      //To turn TXLED pin off
   RXLED0;      //To turn RXLED pin off
 
-  ADCSRA &= ~(1 << ADEN);
+  ADCSRA &= ~(1 << ADEN); //what is this?
   power_all_disable();  // turn off all modules
 
   //LoRa.sleep();
@@ -340,7 +340,7 @@ void deepSleep()
 
 
   //define interrupt
-  attachInterrupt(0, wakeUp, FALLING);
+  attachInterrupt(digitalPinToInterrupt(DI0), wakeUp, FALLING);
 
   sei(); //enable interrupts
 
@@ -351,7 +351,7 @@ void deepSleep()
 
   // On wakeUp...
 
-  detachInterrupt(0);
+  detachInterrupt(digitalPinToInterrupt(DI0));
   Serial.begin(9600);
   // put everything on again
   power_all_enable();

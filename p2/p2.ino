@@ -30,10 +30,9 @@
 #define READ_LATEST_TEMP  1
 #define READ_ALL_TEMP     2
 #define ENABLE_LOW_OP     3
-#define TABLE_SIZE        512
-#define RECORDS_TO_CREATE 10
-
-
+#define DESTROY_DB        4
+#define TABLE_SIZE        2048
+#define RECORDS_TO_CREATE 150
 
 bool DEBUG  = true;
 int packetCounter = 0;
@@ -67,7 +66,7 @@ byte reader(unsigned long address) {
 EDB db(&writer, &reader);
 
 QueueHandle_t loraQueue;
-QueueHandle_t sleepQueue;
+QueueHandle_t sleepQueue; 
 
 struct DBEntry {
   char id[5];
@@ -81,13 +80,8 @@ dBEntry;
 void setup()
 {
   Serial.begin(9600);                             // Set data rate in bits for serial transmission
-  while (!Serial)
-  {
-    debugPrintln("Serial problem");
-  }
-  
   // Wait for Serial to become ready
-  debugPrintln("PR booting...");
+  while (!Serial) {;}
 
   // Initializing LoRa
   LoRa.setPins(SS, RST, DI0);
@@ -105,19 +99,36 @@ void setup()
   }
   xSemaphoreGive(dbSemaphoreHandle);
 
-  // Initializing EDB
-  if (db.create(0, TABLE_SIZE, sizeof(dBEntry)) != EDB_OK)
+  // Initializing EDB  
+  bool filled = db.open(0) == EDB_OK && db.readRec(1, EDB_REC dBEntry) == EDB_OK;
+  if (!filled)
   {
-    debugPrintln("PR booting failed - EDB could not be initialized");
+    if (db.create(0, TABLE_SIZE, sizeof(dBEntry)) != EDB_OK)
+    {
+      debugPrintln("PR booting failed - EDB could not be initialized");
+      while (1);
+    }
+  }
+  else
+  {
+    currentRecordNo = db.count();
+  }
+  
+
+  // Initializing Queue
+  loraQueue = xQueueCreate(3, sizeof(dBEntry));
+  if (loraQueue == NULL)
+  {
+    debugPrintln("PR booting failed - loraQueue could not be initialized");
     while (1);
   }
 
-  // Initializing Queue
-  loraQueue = xQueueCreate(20, sizeof(dBEntry));
-  if (loraQueue == NULL)
+  sleepQueue = xQueueCreate(3, sizeof(int));
+  if (sleepQueue == NULL)
   {
-    debugPrintln("PR booting failed - Queue could not be initialized");
-    while (1);
+    debugPrintln("PR booting failed - sleepQueue could not be initialized");
+    while (1)
+      ;
   }
 
   // Initializing temperature sensor
@@ -168,23 +179,23 @@ void loop()
 
 void handleUserCommands(void *pvParameters)
 {
-  debugPrintln("handleUserCommands");
   while (1)
   {
     int userInput;
-    int sleeptime = 1900/portTICK_PERIOD_MS;
-
+    int sleeptime;
     while (Serial.available() == 0) 
     {
-      debugPrintln("Waiting in serial.available");
-      //vTaskDelay(500 / portTICK_PERIOD_MS); // One tick delay in between reads so that other processes get the chance to run.
-      if (xQueueReceive(sleepQueue, &sleeptime, 50/portTICK_PERIOD_MS) == pdPASS)
+      if (xQueueReceive(sleepQueue, &sleeptime, portMAX_DELAY) == pdPASS)
       {
-        debugPrintln("Consume sleepQueue");
-        vTaskDelay(sleeptime);
+        vTaskDelay(sleeptime/portTICK_PERIOD_MS);
       }
+      else
+      {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+      }
+      
+      
     }
-    debugPrintln("H2");
     userInput = Serial.parseInt();
 
     if (userInput == READ_LATEST_TEMP)
@@ -202,27 +213,33 @@ void handleUserCommands(void *pvParameters)
       debugPrintln("Execute - Enable low operation mode");
       deepSleep();
     }
-
+    else if (userInput == DESTROY_DB)
+    {
+      if (xSemaphoreTake(dbSemaphoreHandle, portMAX_DELAY) == pdTRUE)
+      {
+        debugPrintln("Execute - Clear database");
+        currentRecordNo = 0;
+        if (db.create(0, TABLE_SIZE, sizeof(dBEntry)) != EDB_OK)
+          debugPrintln("Error destroying db");
+        xSemaphoreGive(dbSemaphoreHandle);
+      }
+    }
   }
 }
 
 void receiveBeacon(void *pvParameters)
 {
-  debugPrintln("receiveBeacon");
   unsigned long milisBefore;
   unsigned long milisAfter;
   while (1)
   {
     debugPrint("Packet: "); debugPrintln(packetCounter);
     sleepTime = receive();
-
     packetCounter++;
     milisBefore = millis();
     receiveDelay = (sleepTime - (0.060 * sleepTime) - 70) / portTICK_PERIOD_MS;
-    debugPrintln("Going to sleep in receiveBeacon");
     vTaskDelay(receiveDelay);
     milisAfter = millis();
-    debugPrint("Seconds slept: ");
     int sleepduration = (int)(milisAfter - milisBefore);
     debugPrint("Sleepduration "); debugPrintln(sleepduration);
     if (packetCounter == 20) deepSleep();
@@ -232,23 +249,22 @@ void receiveBeacon(void *pvParameters)
 
 void consumeQueue(void *pvParameters)
 {
-  debugPrintln("consumeQueue");
   struct DBEntry local;
   int sleep;
   while (1)
   {
     sleep = 1900 / portTICK_PERIOD_MS;
-    if (xQueueReceive(loraQueue, &local, 50 / portTICK_PERIOD_MS) == pdPASS)
+    if (xQueueReceive(loraQueue, &local, portMAX_DELAY) == pdPASS)
     {
-      debugPrintln("Consume loraQueue");
       local.temperature = chipTemp(chipTempRaw());
-      sleep = local.sleepduration / portTICK_PERIOD_MS;
-      writeToDB(&local);
       send(local.temperature);
+      sleep = local.sleepduration;
+      writeToDB(&local);
     }
-    debugPrintln("Going to sleep in consumeQueue");
-    vTaskDelay(sleep);
+    vTaskDelay((sleep-500)/portTICK_PERIOD_MS);
   }
+
+
 }
 
 // --------------------------------------------------------------------------------------
@@ -293,14 +309,11 @@ int receive()
   int sleep;
   parseSleep(buffer, &sleep);
 
-  debugPrint("Sleep in receive is: ");
-  debugPrintln(sleep);
-
   struct DBEntry local;
   memcpy(local.id, id, sizeof(id));
   local.sleepduration = sleep;
-  xQueueSend(loraQueue, &local, 50 / portTICK_PERIOD_MS);
-  xQueueSend(sleepQueue, &sleep, 50 / portTICK_PERIOD_MS);
+  xQueueSend(loraQueue, &local, portMAX_DELAY);
+  xQueueSend(sleepQueue, &sleep, portMAX_DELAY);
 
   return sleep;
 }
@@ -325,11 +338,8 @@ void parseSleep(char* buffer, int* sleep)
   }
   sleeptime[2] = '\0';
   *sleep = atoi(sleeptime) * 1000;
-  if (*sleep < 2000 || *sleep == NULL || *sleep == 0)
+  if (*sleep < 2000 || *sleep == NULL || *sleep > 10000)
     *sleep = 2000; // If sleep is faulty parsed, return minimum sleeptime
-
-  debugPrint("Sleep is: ");
-  debugPrintln(*sleep);
 }
 
 // --------------------------------------------------------------------------------------
@@ -442,8 +452,8 @@ void writeToDB(struct DBEntry *entry)
     {
       Serial.println("Table full exception");
     }
+    db.appendRec(EDB_REC *entry);
     currentRecordNo++;
-    db.appendRec(EDB_REC * entry);
     xSemaphoreGive(dbSemaphoreHandle);
   }
 }
@@ -463,7 +473,7 @@ void readAll()
   if (xSemaphoreTake(dbSemaphoreHandle, portMAX_DELAY) == pdTRUE)
   {
     int i;
-    for (i = 0; i < currentRecordNo; i++)
+    for (i = 1; i <= currentRecordNo; i++)
     {
       db.readRec(i, EDB_REC dBEntry);
       readEntry(dBEntry);

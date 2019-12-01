@@ -218,9 +218,8 @@ void receiveBeacon(void *pvParameters)
 
     packetCounter++;
     milisBefore = millis();
-    receiveDelay = (sleepTime - (0.060 * sleepTime) - 70) / portTICK_PERIOD_MS;
     debugPrintln("Going to sleep in receiveBeacon");
-    vTaskDelay(receiveDelay);
+    vTaskDelay(sleepTime);
     milisAfter = millis();
     debugPrint("Seconds slept: ");
     int sleepduration = (int)(milisAfter - milisBefore);
@@ -240,6 +239,7 @@ void consumeQueue(void *pvParameters)
     sleep = 1900 / portTICK_PERIOD_MS;
     if (xQueueReceive(loraQueue, &local, 50 / portTICK_PERIOD_MS) == pdPASS)
     {
+      
       debugPrintln("Consume loraQueue");
       local.temperature = chipTemp(chipTempRaw());
       sleep = local.sleepduration / portTICK_PERIOD_MS;
@@ -300,6 +300,7 @@ int receive()
   memcpy(local.id, id, sizeof(id));
   local.sleepduration = sleep;
   xQueueSend(loraQueue, &local, 50 / portTICK_PERIOD_MS);
+  sleep = (sleepTime - (0.060 * sleepTime) - 70) / portTICK_PERIOD_MS;
   xQueueSend(sleepQueue, &sleep, 50 / portTICK_PERIOD_MS);
 
   return sleep;

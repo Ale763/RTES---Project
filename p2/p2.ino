@@ -185,15 +185,15 @@ void handleUserCommands(void *pvParameters)
     int sleeptime;
     while (Serial.available() == 0) 
     {
-      if (xQueueReceive(sleepQueue, &sleeptime, portMAX_DELAY) == pdPASS)
+      while (xQueueReceive(sleepQueue, &sleeptime, portMAX_DELAY) == pdPASS)
       {
-        vTaskDelay(sleeptime/portTICK_PERIOD_MS);
+        sleeptime = (sleeptime - (0.060 * sleeptime) - 70) / portTICK_PERIOD_MS;
+        if(xQueuePeek(sleepQueue, &sleeptime, 0) != pdPASS)
+        {
+          break;
+        }
       }
-      else
-      {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-      }
-      
+      vTaskDelay(sleeptime);
       
     }
     userInput = Serial.parseInt();
@@ -237,7 +237,7 @@ void receiveBeacon(void *pvParameters)
     sleepTime = receive();
     packetCounter++;
     milisBefore = millis();
-    receiveDelay = (sleepTime - (0.060 * sleepTime) - 70) / portTICK_PERIOD_MS;
+    receiveDelay = (sleepTime - (0.060 * sleepTime) - 100) / portTICK_PERIOD_MS;
     vTaskDelay(receiveDelay);
     milisAfter = millis();
     int sleepduration = (int)(milisAfter - milisBefore);
@@ -254,14 +254,20 @@ void consumeQueue(void *pvParameters)
   while (1)
   {
     sleep = 1900 / portTICK_PERIOD_MS;
-    if (xQueueReceive(loraQueue, &local, portMAX_DELAY) == pdPASS)
+    while (xQueueReceive(loraQueue, &local, portMAX_DELAY) == pdPASS)
     {
       local.temperature = chipTemp(chipTempRaw());
+      debugPrintln("sending packet");
       send(local.temperature);
       sleep = local.sleepduration;
       writeToDB(&local);
+      if(xQueuePeek(loraQueue, &local, 0) != pdPASS)
+      {
+          break;
+      }
     }
-    vTaskDelay((sleep-500)/portTICK_PERIOD_MS);
+    sleep = ((0.94 * sleep) + 50) / portTICK_PERIOD_MS;
+    vTaskDelay(sleep);
   }
 
 

@@ -19,7 +19,9 @@
 #define DI0     7
 #define BAND    8695E5 //915E6
 #define PABOOST true
-#define configUSE_TICKLESS_IDLE 0
+// #define configUSE_TICKLESS_IDLE 1
+// #define configEXPECTED_IDLE_TIME_BEFORE_SLEEP 1000/portTICK_PERIOD_MS;
+#define configUSE_IDLE_HOOK 1
 
 // Uncomment the line appropriate for your platform
 #define TABLE_SIZE 512 // Arduino 168 or greater
@@ -34,19 +36,28 @@
 #define TABLE_SIZE        2048
 #define RECORDS_TO_CREATE 150
 
-bool DEBUG  = true;
+// Timer 4 PRR bit is currently not defined in iom32u4.h
+#ifndef PRTIM4
+  #define PRTIM4 4
+#endif
+
+// Timer 4 power reduction macro is not defined currently in power.h
+#ifndef power_timer4_disable
+  #define power_timer4_disable() (PRR1 |= (uint8_t)(1 << PRTIM4))
+#endif
+
+#ifndef power_timer4_enable
+  #define power_timer4_enable() (PRR1 &= (uint8_t) ~(1 << PRTIM4))
+#endif
+
+bool DEBUG  = false;
+int amtOfPackagesBeforeSleep = 20;
 int packetCounter = 0;
 int sleepTime = 0;
 
 const int wakeUpPin = 3;
 
 int currentRecordNo = 0;
-float currentTemp;
-String incomingPacket;
-String inputPacket = "Ping";
-bool sending = true;
-unsigned long receive0 = 0;
-unsigned long receive1 = 0;
 TaskHandle_t receiveBeaconTaskHandle;
 TickType_t receiveDelay;
 TaskHandle_t userCommandTaskHandle;
@@ -81,7 +92,7 @@ void setup()
 {
   Serial.begin(9600);                             // Set data rate in bits for serial transmission
   // Wait for Serial to become ready
-  while (!Serial) {;}
+  // while (!Serial) {;}
 
   // Initializing LoRa
   LoRa.setPins(SS, RST, DI0);
@@ -183,7 +194,7 @@ void handleUserCommands(void *pvParameters)
   {
     int userInput;
     int sleeptime;
-    while (Serial.available() == 0) 
+    if (Serial.available() == 0) 
     {
       while (xQueueReceive(sleepQueue, &sleeptime, portMAX_DELAY) == pdPASS)
       {
@@ -236,13 +247,11 @@ void receiveBeacon(void *pvParameters)
     debugPrint("Packet: "); debugPrintln(packetCounter);
     sleepTime = receive();
     packetCounter++;
-    milisBefore = millis();
-    receiveDelay = (sleepTime - (0.060 * sleepTime) - 100) / portTICK_PERIOD_MS;
+    if (packetCounter == amtOfPackagesBeforeSleep)
+      deepSleep();
+
+    receiveDelay = (sleepTime - (0.060 * sleepTime) - 70) / portTICK_PERIOD_MS;
     vTaskDelay(receiveDelay);
-    milisAfter = millis();
-    int sleepduration = (int)(milisAfter - milisBefore);
-    debugPrint("Sleepduration "); debugPrintln(sleepduration);
-    if (packetCounter == 20) deepSleep();
   }
 
 }
@@ -273,13 +282,49 @@ void consumeQueue(void *pvParameters)
 
 }
 
+void vApplicationIdleHook(void)
+{
+  digitalWrite(LED_BUILTIN, LOW);
+
+  ADCSRA &= ~(1 << ADEN);
+  power_adc_disable();
+
+  power_timer4_disable();
+  power_timer3_disable();
+  power_timer1_disable();
+
+  power_usart1_disable();
+  power_twi_disable();
+  // power_spi_disable();
+  power_usb_disable();
+
+  set_sleep_mode(SLEEP_MODE_IDLE);
+  cli();
+  sleep_enable();
+  sei();
+  sleep_cpu();
+  sleep_disable();
+  sei();
+
+  power_usb_enable();
+  power_adc_enable();
+  ADCSRA |= (1 << ADEN);
+
+  power_timer4_enable();
+  power_timer3_enable();
+  power_timer1_enable();
+
+  // power_spi_enable();
+  power_usart1_enable();
+  power_twi_enable();
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+
 // --------------------------------------------------------------------------------------
 // Communication functionality
 
 void send(float temp)
 {
-  // byte* sleepTimeBytes = (byte*)&sleepTime;
-  // byte* tempBytes = (byte*)&temp;
 
   char tempbuffer[6];
   dtostrf(temp, 4, 2, tempbuffer);
@@ -306,9 +351,10 @@ int receive()
   while (LoRa.available() && i < 7)
   {
     buffer[i] = (char)LoRa.read();
-    Serial.print(buffer[i++]);
+    debugPrint(buffer[i++]);
+    debugPrintln("");
   }
-  Serial.println("");
+  
 
   char id[5];
   parseID(buffer, id);
@@ -377,11 +423,11 @@ void deepSleep()
     digitalWrite(i, LOW);
   }
 
-  //LoRa.sleep();
+  // LoRa.sleep();
 
   // Disable digital input buffers on all analog input pins
   // by setting bits 0-5 to one.
-  //DIDR0 = DIDR0 | B00111111;
+  DIDR0 = DIDR0 | B00111111;
 
   // Set sleep to full power down.
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);

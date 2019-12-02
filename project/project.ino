@@ -81,10 +81,10 @@ dBEntry;
 void setup()
 {
   Serial.begin(9600);                             // Set data rate in bits for serial transmission
-  while (!Serial)
-  {
-    debugPrintln("Serial problem");
-  }
+  // while (!Serial)
+  // {
+  //   debugPrintln("Serial problem");
+  // }
   
   // Wait for Serial to become ready
   debugPrintln("PR booting...");
@@ -224,7 +224,7 @@ void receiveBeacon(void *pvParameters)
     debugPrint("Seconds slept: ");
     int sleepduration = (int)(milisAfter - milisBefore);
     debugPrint("Sleepduration "); debugPrintln(sleepduration);
-    if (packetCounter == 20) deepSleep();
+    if (packetCounter == 3) deepSleep();
   }
 
 }

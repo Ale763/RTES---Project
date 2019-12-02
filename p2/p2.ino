@@ -295,7 +295,6 @@ void vApplicationIdleHook(void)
 
   power_usart1_disable();
   power_twi_disable();
-  // power_spi_disable();
   power_usb_disable();
 
   set_sleep_mode(SLEEP_MODE_IDLE);
@@ -314,7 +313,6 @@ void vApplicationIdleHook(void)
   power_timer3_enable();
   power_timer1_enable();
 
-  // power_spi_enable();
   power_usart1_enable();
   power_twi_enable();
   digitalWrite(LED_BUILTIN, HIGH);

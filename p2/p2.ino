@@ -21,7 +21,7 @@
 #define PABOOST true
 #define configUSE_IDLE_HOOK 1
 
-// Uncomment the line appropriate for your platform
+//source: https://github.com/jwhiddon/EDB
 #define TABLE_SIZE 512 // Arduino 168 or greater
 
 // The number of demo records that should be created.  This should be less
@@ -34,6 +34,7 @@
 #define TABLE_SIZE        2048
 #define RECORDS_TO_CREATE 150
 
+// source: https://github.com/rocketscream/Low-Power/blob/master/LowPower.cpp
 // Timer 4 PRR bit is currently not defined in iom32u4.h
 #ifndef PRTIM4
   #define PRTIM4 4
@@ -51,7 +52,6 @@
 bool DEBUG  = false;
 int amtOfPackagesBeforeSleep = 20;
 int packetCounter = 0;
-int sleepTime = 0;
 
 const int wakeUpPin = 3;
 
@@ -59,7 +59,7 @@ int currentRecordNo = 0;
 TaskHandle_t receiveBeaconTaskHandle;
 TickType_t receiveDelay;
 TaskHandle_t userCommandTaskHandle;
-TaskHandle_t consumeQueueTaskHandle;
+//TaskHandle_t consumeQueueTaskHandle;
 SemaphoreHandle_t dbSemaphoreHandle;
 
 // The read and write handlers for using the EEPROM Library
@@ -74,7 +74,7 @@ byte reader(unsigned long address) {
 // Create an EDB object with the appropriate write and read handlers
 EDB db(&writer, &reader);
 
-QueueHandle_t loraQueue;
+//QueueHandle_t loraQueue;
 QueueHandle_t sleepQueue; 
 
 struct DBEntry {
@@ -83,8 +83,6 @@ struct DBEntry {
   float temperature;
 }
 dBEntry;
-
-
 
 void setup()
 {
@@ -123,16 +121,8 @@ void setup()
     currentRecordNo = db.count();
   }
   
-
   // Initializing Queue
-  loraQueue = xQueueCreate(3, sizeof(dBEntry));
-  if (loraQueue == NULL)
-  {
-    debugPrintln("PR booting failed - loraQueue could not be initialized");
-    while (1);
-  }
-
-  sleepQueue = xQueueCreate(3, sizeof(int));
+  sleepQueue = xQueueCreate(20, sizeof(int));
   if (sleepQueue == NULL)
   {
     debugPrintln("PR booting failed - sleepQueue could not be initialized");
@@ -159,15 +149,6 @@ void setup()
     4,    // priority
     &receiveBeaconTaskHandle);
 
-  /* Send Beacon Task */
-  xTaskCreate(
-    consumeQueue,
-    "consumeQueue",
-    128,  // Stack size
-    NULL, //paramaters task
-    2,    // priority
-    &consumeQueueTaskHandle);
-
   /* User Command Task */
   xTaskCreate(
     handleUserCommands,
@@ -187,7 +168,7 @@ void loop()
 // Sleep utility
 int calculateSleepTime(int sleeptime)
 {
-  return ((int)(sleeptime*0.9399526354 - 17.14448456)) / portTICK_PERIOD_MS;
+  return ((int)(sleeptime*0.9572224005-39.20652397)) / portTICK_PERIOD_MS;
 }
 
 // --------------------------------------------------------------------------------------
@@ -195,15 +176,13 @@ int calculateSleepTime(int sleeptime)
 
 void handleUserCommands(void *pvParameters)
 {
-
-  unsigned long startMillis;
+  int sleeptime = 0;
   while (1)
   {
     int userInput;
-    int sleeptime;
     if (Serial.available() == 0) 
     {
-      while (xQueueReceive(sleepQueue, &sleeptime, portMAX_DELAY) == pdPASS)
+      while (xQueueReceive(sleepQueue, &sleeptime, 0) == pdPASS)
       {
         sleeptime = calculateSleepTime(sleeptime);
         if(xQueuePeek(sleepQueue, &sleeptime, 0) != pdPASS)
@@ -211,97 +190,69 @@ void handleUserCommands(void *pvParameters)
           break;
         }
       }
-      vTaskDelay(sleeptime);
-      
+      vTaskDelay(sleeptime);      
     }else{
       userInput = Serial.parseInt();
 
-     // Use the handle to raise the priority of the created task.
-      vTaskPrioritySet( userCommandTaskHandle, 3 );
       if (userInput == READ_LATEST_TEMP)
       {
-        debugPrintln("Execute - Read latest temperature entry");
+        Serial.println("Execute - Read latest temperature entry");
         readLatest();
       }
       else if (userInput == READ_ALL_TEMP)
       {
-        debugPrintln("Execute - Read all temperature entries");
+        Serial.println("Execute - Read all temperature entries");
         readAll();
       }
       else if (userInput == ENABLE_LOW_OP)
       {
-        debugPrintln("Execute - Enable low operation mode");
+        // Will not get printed because deepSleep is faster than the output to the Serial
+        // Serial.println("Execute - Enable low operation mode");
         deepSleep();
       }
       else if (userInput == DESTROY_DB)
       {
         if (xSemaphoreTake(dbSemaphoreHandle, portMAX_DELAY) == pdTRUE)
         {
-          debugPrintln("Execute - Clear database");
+          Serial.println("Execute - Clear database");
           currentRecordNo = 0;
           if (db.create(0, TABLE_SIZE, sizeof(dBEntry)) != EDB_OK)
             debugPrintln("Error destroying db");
           xSemaphoreGive(dbSemaphoreHandle);
         }
       }
-      vTaskPrioritySet( userCommandTaskHandle, 1 );
-    }
+    } 
   }
-  
 }
 
 void receiveBeacon(void *pvParameters)
 {
+  int sleeptime = 0;
+  int before;
+  int after;
   while (1)
   {
     debugPrint("Packet: "); debugPrintln(packetCounter);
-    sleepTime = receive();
-
-    receiveDelay = calculateSleepTime(sleepTime);
-    vTaskDelay(receiveDelay);
-  }
-
-}
-
-void consumeQueue(void *pvParameters)
-{
-
-  unsigned long startMillis;
-
-  struct DBEntry local;
-  int sleep;
-  while (1)
-  {
-    sleep = 1900 / portTICK_PERIOD_MS;
-    while (xQueueReceive(loraQueue, &local, portMAX_DELAY) == pdPASS)
-    {
-      local.temperature = chipTemp(chipTempRaw());
-      debugPrintln("sending packet");
-      send(local.temperature);
-      sleep = local.sleepduration;
-      writeToDB(&local);
-      if(xQueuePeek(loraQueue, &local, 0) != pdPASS)
-      {
-          break;
-      }
-    }
+    
+    char rawBeacon[7];
+    receive(rawBeacon);
+    struct DBEntry beacon = processBeacon(rawBeacon);
+    sleeptime = calculateSleepTime(beacon.sleepduration);
+    
     packetCounter++;
     if (packetCounter == amtOfPackagesBeforeSleep)
       deepSleep();
-    
-    sleep = calculateSleepTime(sleep);
-    vTaskDelay(sleep);
+
+    before = millis();
+    vTaskDelay(sleeptime);
+    after = millis();
+    debugPrint("Sleep: ");debugPrintln(after-before);
   }
-
-
 }
 
 void vApplicationIdleHook(void)
 {
   digitalWrite(LED_BUILTIN, LOW);
-
-  ADCSRA &= ~(1 << ADEN);
-  power_adc_disable();
 
   power_timer4_disable();
   power_timer3_disable();
@@ -309,6 +260,10 @@ void vApplicationIdleHook(void)
 
   power_usart1_disable();
   power_twi_disable();
+  
+  // Disable ADC
+  ADCSRA &= ~(1 << ADEN);
+  power_adc_disable();
 
   set_sleep_mode(SLEEP_MODE_IDLE);
   cli();
@@ -318,20 +273,18 @@ void vApplicationIdleHook(void)
   sleep_disable();
   sei();
 
-  
+  // Enable ADC
   power_adc_enable();
   ADCSRA |= (1 << ADEN);
-
+  
   power_timer4_enable();
   power_timer3_enable();
   power_timer1_enable();
 
   power_usart1_enable();
   power_twi_enable();
-  digitalWrite(LED_BUILTIN, HIGH);
 
-  //after reenabling usb we need to reenable the serial.
-  Serial.begin(9600);   
+  
 }
 
 // --------------------------------------------------------------------------------------
@@ -339,7 +292,6 @@ void vApplicationIdleHook(void)
 
 void send(float temp)
 {
-
   char tempbuffer[6];
   dtostrf(temp, 4, 2, tempbuffer);
 
@@ -348,7 +300,7 @@ void send(float temp)
   LoRa.endPacket();
 }
 
-int receive()
+char* receive(char* buffer)
 {
   // Try to parse packet
   int packetSize = LoRa.parsePacket();
@@ -357,7 +309,7 @@ int receive()
   {
     packetSize = LoRa.parsePacket();
   }
-  char buffer[7];
+  //char buffer[7];
   memset(buffer, '\0', 7);
 
   // Fill buffer from LoRa
@@ -365,24 +317,34 @@ int receive()
   while (LoRa.available() && i < 7)
   {
     buffer[i] = (char)LoRa.read();
+    i++;
   }
+
+  debugPrintln(buffer);
+
+  return buffer;
+  //return sleep;
+}
+
+struct DBEntry processBeacon(char* buffer)
+{
+  struct DBEntry local;
   char id[5];
   parseID(buffer, id);
   int sleep;
   parseSleep(buffer, &sleep);
-
-  struct DBEntry local;
+  
   memcpy(local.id, id, sizeof(id));
   local.sleepduration = sleep;
-  xQueueSend(loraQueue, &local, portMAX_DELAY);
-  xQueueSend(sleepQueue, &sleep, portMAX_DELAY);
-
-  return sleep;
+  local.temperature = chipTemp(chipTempRaw());
+  debugPrintln(local.temperature);
+  send(local.temperature);
+  writeToDB(&local);
+  xQueueSend(sleepQueue, &sleep, 0);
 }
 
 void parseID(char* buffer, char* id)
 {
-  // Get ID
   for (int j = 0; j < 4; ++j)
   {
     id[j] = buffer[j];
@@ -407,9 +369,11 @@ void parseSleep(char* buffer, int* sleep)
 // --------------------------------------------------------------------------------------
 // deep sleep methods
 // Put the Arduino to deep sleep. Only an interrupt can wake it up.
+// used ideas and some snippets from: http://www.gammon.com.au/forum/?id=11497
 void deepSleep()
 {
 
+  digitalWrite(LED_BUILTIN, LOW);
 
   //disable tasks. lower CPU speed?
   vTaskSuspendAll();
@@ -423,9 +387,6 @@ void deepSleep()
   TXLED0;      //To turn TXLED pin off
   RXLED0;      //To turn RXLED pin off
   
-  //alter the processor frequency
-  clock_prescale_set (clock_div_256);
-
   byte old_ADCSRA = ADCSRA;
   ADCSRA = 0;  //disable ADC
   
@@ -470,8 +431,6 @@ void deepSleep()
 
   ADCSRA = old_ADCSRA;
 
-  //reset clock frequency
-  clock_prescale_set (clock_div_1);
   // Enable USB if it exists
 #if defined(USBCON) && !defined(USE_TINYUSB)
   USBDevice.attach();
@@ -491,6 +450,7 @@ void wakeUp()
 
 // --------------------------------------------------------------------------------------
 // Temperature sensor methods
+// source: https://forum.pjrc.com/threads/54445-Teensy-(ATmega32U4)-on-chip-temperature-sensor
 
 float chipTemp(float raw)
 {
@@ -552,11 +512,11 @@ void readAll()
 
 void readEntry(struct DBEntry entry)
 {
-  Serial.print("ID: ");
+  Serial.print("\tID: ");
   Serial.println(entry.id);
-  Serial.print("Time: ");
+  Serial.print("\tTime: ");
   Serial.println(entry.sleepduration);
-  Serial.print("Temp: ");
+  Serial.print("\tTemp: ");
   Serial.println(entry.temperature);
 }
 

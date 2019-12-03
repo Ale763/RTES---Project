@@ -146,7 +146,7 @@ void setup()
     "receiveBeacon",
     128,  // Stack size
     NULL, //paramaters task
-    4,    // priority
+    2,    // priority
     &receiveBeaconTaskHandle);
 
   /* User Command Task */

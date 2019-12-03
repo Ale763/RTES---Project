@@ -19,8 +19,6 @@
 #define DI0     7
 #define BAND    8695E5 //915E6
 #define PABOOST true
-// #define configUSE_TICKLESS_IDLE 1
-// #define configEXPECTED_IDLE_TIME_BEFORE_SLEEP 1000/portTICK_PERIOD_MS;
 #define configUSE_IDLE_HOOK 1
 
 // Uncomment the line appropriate for your platform
@@ -158,7 +156,7 @@ void setup()
     "receiveBeacon",
     128,  // Stack size
     NULL, //paramaters task
-    3,    // priority
+    4,    // priority
     &receiveBeaconTaskHandle);
 
   /* Send Beacon Task */
@@ -167,7 +165,7 @@ void setup()
     "consumeQueue",
     128,  // Stack size
     NULL, //paramaters task
-    1,    // priority
+    2,    // priority
     &consumeQueueTaskHandle);
 
   /* User Command Task */
@@ -176,7 +174,7 @@ void setup()
     "handleUserCommands",
     128,  // Stack size
     NULL, //paramaters task
-    2,    // priority
+    1,    // priority
     &userCommandTaskHandle);
 }
 
@@ -186,10 +184,19 @@ void loop()
 }
 
 // --------------------------------------------------------------------------------------
+// Sleep utility
+int calculateSleepTime(int sleeptime)
+{
+  return ((int)(sleeptime*0.9399526354 - 17.14448456)) / portTICK_PERIOD_MS;
+}
+
+// --------------------------------------------------------------------------------------
 // Tasks
 
 void handleUserCommands(void *pvParameters)
 {
+
+  unsigned long startMillis;
   while (1)
   {
     int userInput;
@@ -198,7 +205,7 @@ void handleUserCommands(void *pvParameters)
     {
       while (xQueueReceive(sleepQueue, &sleeptime, portMAX_DELAY) == pdPASS)
       {
-        sleeptime = (sleeptime - (0.060 * sleeptime) - 70) / portTICK_PERIOD_MS;
+        sleeptime = calculateSleepTime(sleeptime);
         if(xQueuePeek(sleepQueue, &sleeptime, 0) != pdPASS)
         {
           break;
@@ -206,51 +213,51 @@ void handleUserCommands(void *pvParameters)
       }
       vTaskDelay(sleeptime);
       
-    }
-    userInput = Serial.parseInt();
+    }else{
+      userInput = Serial.parseInt();
 
-    if (userInput == READ_LATEST_TEMP)
-    {
-      debugPrintln("Execute - Read latest temperature entry");
-      readLatest();
-    }
-    else if (userInput == READ_ALL_TEMP)
-    {
-      debugPrintln("Execute - Read all temperature entries");
-      readAll();
-    }
-    else if (userInput == ENABLE_LOW_OP)
-    {
-      debugPrintln("Execute - Enable low operation mode");
-      deepSleep();
-    }
-    else if (userInput == DESTROY_DB)
-    {
-      if (xSemaphoreTake(dbSemaphoreHandle, portMAX_DELAY) == pdTRUE)
+     // Use the handle to raise the priority of the created task.
+      vTaskPrioritySet( userCommandTaskHandle, 3 );
+      if (userInput == READ_LATEST_TEMP)
       {
-        debugPrintln("Execute - Clear database");
-        currentRecordNo = 0;
-        if (db.create(0, TABLE_SIZE, sizeof(dBEntry)) != EDB_OK)
-          debugPrintln("Error destroying db");
-        xSemaphoreGive(dbSemaphoreHandle);
+        debugPrintln("Execute - Read latest temperature entry");
+        readLatest();
       }
+      else if (userInput == READ_ALL_TEMP)
+      {
+        debugPrintln("Execute - Read all temperature entries");
+        readAll();
+      }
+      else if (userInput == ENABLE_LOW_OP)
+      {
+        debugPrintln("Execute - Enable low operation mode");
+        deepSleep();
+      }
+      else if (userInput == DESTROY_DB)
+      {
+        if (xSemaphoreTake(dbSemaphoreHandle, portMAX_DELAY) == pdTRUE)
+        {
+          debugPrintln("Execute - Clear database");
+          currentRecordNo = 0;
+          if (db.create(0, TABLE_SIZE, sizeof(dBEntry)) != EDB_OK)
+            debugPrintln("Error destroying db");
+          xSemaphoreGive(dbSemaphoreHandle);
+        }
+      }
+      vTaskPrioritySet( userCommandTaskHandle, 1 );
     }
   }
+  
 }
 
 void receiveBeacon(void *pvParameters)
 {
-  unsigned long milisBefore;
-  unsigned long milisAfter;
   while (1)
   {
     debugPrint("Packet: "); debugPrintln(packetCounter);
     sleepTime = receive();
-    packetCounter++;
-    if (packetCounter == amtOfPackagesBeforeSleep)
-      deepSleep();
 
-    receiveDelay = (sleepTime - (0.060 * sleepTime) - 70) / portTICK_PERIOD_MS;
+    receiveDelay = calculateSleepTime(sleepTime);
     vTaskDelay(receiveDelay);
   }
 
@@ -258,6 +265,9 @@ void receiveBeacon(void *pvParameters)
 
 void consumeQueue(void *pvParameters)
 {
+
+  unsigned long startMillis;
+
   struct DBEntry local;
   int sleep;
   while (1)
@@ -275,7 +285,11 @@ void consumeQueue(void *pvParameters)
           break;
       }
     }
-    sleep = ((0.94 * sleep) + 50) / portTICK_PERIOD_MS;
+    packetCounter++;
+    if (packetCounter == amtOfPackagesBeforeSleep)
+      deepSleep();
+    
+    sleep = calculateSleepTime(sleep);
     vTaskDelay(sleep);
   }
 
@@ -295,7 +309,6 @@ void vApplicationIdleHook(void)
 
   power_usart1_disable();
   power_twi_disable();
-  power_usb_disable();
 
   set_sleep_mode(SLEEP_MODE_IDLE);
   cli();
@@ -305,7 +318,7 @@ void vApplicationIdleHook(void)
   sleep_disable();
   sei();
 
-  power_usb_enable();
+  
   power_adc_enable();
   ADCSRA |= (1 << ADEN);
 
@@ -316,6 +329,9 @@ void vApplicationIdleHook(void)
   power_usart1_enable();
   power_twi_enable();
   digitalWrite(LED_BUILTIN, HIGH);
+
+  //after reenabling usb we need to reenable the serial.
+  Serial.begin(9600);   
 }
 
 // --------------------------------------------------------------------------------------
@@ -349,11 +365,7 @@ int receive()
   while (LoRa.available() && i < 7)
   {
     buffer[i] = (char)LoRa.read();
-    debugPrint(buffer[i++]);
-    debugPrintln("");
   }
-  
-
   char id[5];
   parseID(buffer, id);
   int sleep;
@@ -410,18 +422,21 @@ void deepSleep()
 
   TXLED0;      //To turn TXLED pin off
   RXLED0;      //To turn RXLED pin off
+  
+  //alter the processor frequency
+  clock_prescale_set (clock_div_256);
 
-  ADCSRA &= ~(1 << ADEN); //what is this?
+  byte old_ADCSRA = ADCSRA;
+  ADCSRA = 0;  //disable ADC
+  
   power_all_disable();  // turn off all modules
 
   // Ensure no floating pins
-  for(int i=0; i<20 ; i++)
+  for(int i=0; i<A5 ; i++)
   {
     pinMode(i, OUTPUT);
     digitalWrite(i, LOW);
   }
-
-  // LoRa.sleep();
 
   // Disable digital input buffers on all analog input pins
   // by setting bits 0-5 to one.
@@ -453,7 +468,10 @@ void deepSleep()
   // put everything on again
   power_all_enable();
 
+  ADCSRA = old_ADCSRA;
 
+  //reset clock frequency
+  clock_prescale_set (clock_div_1);
   // Enable USB if it exists
 #if defined(USBCON) && !defined(USE_TINYUSB)
   USBDevice.attach();
@@ -476,7 +494,7 @@ void wakeUp()
 
 float chipTemp(float raw)
 {
-  const float chipTempOffset = -142.5;
+  const float chipTempOffset = -142.4;
   const float chipTempCoeff = .558;
   return ((raw * chipTempCoeff) + chipTempOffset);
 }
@@ -534,12 +552,12 @@ void readAll()
 
 void readEntry(struct DBEntry entry)
 {
-  debugPrint("ID: ");
-  debugPrintln(entry.id);
-  debugPrint("Time: ");
-  debugPrintln(entry.sleepduration);
-  debugPrint("Temp: ");
-  debugPrintln(entry.temperature);
+  Serial.print("ID: ");
+  Serial.println(entry.id);
+  Serial.print("Time: ");
+  Serial.println(entry.sleepduration);
+  Serial.print("Temp: ");
+  Serial.println(entry.temperature);
 }
 
 // --------------------------------------------------------------------------------------
